@@ -67,16 +67,6 @@ python agent.py
 
 在启动的沙箱 IDE 中，右键点击文件、选区或文件夹，选择 AI Code Review 启动审查。
 
-📈 简历亮点建议
-
-如果你打算将本项目写在简历中，可以强调以下难点攻克经验：
-
-解决线程同步问题：如何利用 executeOnPooledThread 异步处理网络请求，并切回 invokeLater 安全更新 UI。
-
-解决协议兼容性：在 Java HttpClient 中强制降级 HTTP/1.1 以确保与本地 Python 服务的 Body 传输稳定性。
-
-解决 AI 幻觉匹配：通过字符串正则清理和换行符统一化逻辑，解决大模型输出 JSON 格式不规范导致的 indexOf 匹配失效。
-
 📝 开源协议
 
 MIT License
