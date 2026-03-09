@@ -1,15 +1,22 @@
+import os
 import json
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List
 from openai import OpenAI
+from dotenv import load_dotenv
+
+# 加载当前目录下的 .env 文件
+load_dotenv()
 
 app = FastAPI()
 
-# 初始化 OpenAI 客户端 (以阿里云百炼为例)
-# 建议在实际使用时将 API Key 放入环境变量
+# 从环境变量中安全获取 API Key
+# 建议在本地创建一个 .env 文件并写入 DASHSCOPE_API_KEY=你的秘钥
+api_key = os.getenv("DASHSCOPE_API_KEY", "")
+
 client = OpenAI(
-    api_key="sk-0094bd01a705420d8ddb16d6ba04647c",
+    api_key=api_key,
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
 )
 
@@ -29,6 +36,9 @@ async def project_review(request: ProjectRequest):
     """
     全项目审查接口：接收多个文件上下文，识别跨文件的逻辑问题并给出修复建议。
     """
+    if not api_key:
+        return {"status": "error", "message": "API Key 未配置，请检查环境变量或 .env 文件"}
+
     # 1. 构建项目上下文描述
     context_desc = "\n".join([f"文件路径: {f.path}\n内容:\n{f.content}\n---" for f in request.files])
 
@@ -63,6 +73,9 @@ async def project_review(request: ProjectRequest):
             raw_content = raw_content[7:-3].strip()
         elif raw_content.startswith("```"):
             raw_content = raw_content[3:-3].strip()
+        # 针对某些情况模型可能在末尾多加了符号
+        if raw_content.endswith("```"):
+            raw_content = raw_content[:-3].strip()
 
         # 4. 解析并返回结果
         try:
