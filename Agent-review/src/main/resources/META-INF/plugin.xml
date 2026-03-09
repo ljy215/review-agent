@@ -1,0 +1,32 @@
+<idea-plugin>
+    <id>com.work.Agent-review</id>
+    <name>Agent-review</name>
+    <vendor email="support@yourcompany.com" url="https://www.yourcompany.com">YourCompany</vendor>
+
+    <description><![CDATA[
+    基于大模型的跨语言代码审查 Agent 插件。<br>
+    支持通过右键菜单一键发送代码至本地 Python Agent 服务进行规范与逻辑校验。
+  ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Agent Chat"
+                    secondary="true"
+                    anchor="right"
+                    icon="AllIcons.General.Web"
+                    factoryClass="com.work.agentreview.AgentChatToolWindowFactory"/>
+    </extensions>
+
+    <actions>
+        <action id="com.work.agentreview.AgentReviewAction"
+                class="com.work.agentreview.AgentReviewAction"
+                text="AI Code Review"
+                description="发送当前代码给 Agent 进行审查">
+
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt R"/>
+        </action>
+    </actions>
+</idea-plugin>
