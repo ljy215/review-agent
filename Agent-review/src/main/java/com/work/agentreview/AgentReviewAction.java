@@ -21,6 +21,12 @@ import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowManager;
+import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiDocumentManager;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiFile;
+import com.intellij.psi.PsiMethod;
+import com.intellij.psi.util.PsiTreeUtil;
 import org.jetbrains.annotations.NotNull;
 
 import java.net.URI;
@@ -35,6 +41,7 @@ import java.util.*;
  * 升级版 AgentReviewAction：支持全项目/多文件上下文感知与跨文件精准修复
  */
 public class AgentReviewAction extends AnAction {
+    private static final int MAX_CHUNK_TOKENS = 1800;
 
     @Override
     public void actionPerformed(@NotNull AnActionEvent e) {
@@ -45,23 +52,26 @@ public class AgentReviewAction extends AnAction {
         VirtualFile[] selectedFiles = e.getData(CommonDataKeys.VIRTUAL_FILE_ARRAY);
         Editor editor = e.getData(CommonDataKeys.EDITOR);
 
-        List<Map<String, String>> filesToScan = new ArrayList<>();
+        List<Map<String, Object>> filesToScan = new ArrayList<>();
 
         if (editor != null && editor.getSelectionModel().hasSelection()) {
             // 情况 A: 用户在编辑器里选中了一段特定的代码
             Document doc = editor.getDocument();
             VirtualFile vFile = FileDocumentManager.getInstance().getFile(doc);
             if (vFile != null) {
-                Map<String, String> fileData = new HashMap<>();
+                Map<String, Object> fileData = new HashMap<>();
                 fileData.put("path", vFile.getPath());
                 fileData.put("name", vFile.getName());
-                fileData.put("content", editor.getSelectionModel().getSelectedText());
+                String selectedText = editor.getSelectionModel().getSelectedText();
+                fileData.put("content", selectedText);
+                fileData.put("language", detectLanguage(vFile));
+                fileData.put("chunks", buildSelectionChunk(vFile, editor, selectedText));
                 filesToScan.add(fileData);
             }
         } else if (selectedFiles != null) {
             // 情况 B: 用户在项目树右键点击了文件或文件夹
             for (VirtualFile file : selectedFiles) {
-                collectFiles(file, filesToScan);
+                collectFiles(project, file, filesToScan);
             }
         }
 
@@ -105,24 +115,133 @@ public class AgentReviewAction extends AnAction {
     /**
      * 递归收集文件夹下的所有代码文件
      */
-    private void collectFiles(VirtualFile file, List<Map<String, String>> fileList) {
+    private void collectFiles(Project project, VirtualFile file, List<Map<String, Object>> fileList) {
         if (file.isDirectory()) {
             for (VirtualFile child : file.getChildren()) {
-                collectFiles(child, fileList);
+                collectFiles(project, child, fileList);
             }
         } else {
             String name = file.getName().toLowerCase();
             if (name.endsWith(".java") || name.endsWith(".py") || name.endsWith(".js") || name.endsWith(".ts")) {
                 Document doc = FileDocumentManager.getInstance().getDocument(file);
                 if (doc != null) {
-                    Map<String, String> data = new HashMap<>();
+                    Map<String, Object> data = new HashMap<>();
                     data.put("path", file.getPath());
                     data.put("name", file.getName());
-                    data.put("content", doc.getText());
+                    String content = doc.getText();
+                    data.put("content", content);
+                    data.put("language", detectLanguage(file));
+                    data.put("chunks", buildSemanticChunks(project, file, doc));
                     fileList.add(data);
                 }
             }
         }
+    }
+
+    private String detectLanguage(VirtualFile file) {
+        String name = file.getName().toLowerCase();
+        if (name.endsWith(".java")) return "java";
+        if (name.endsWith(".kt")) return "kotlin";
+        if (name.endsWith(".py")) return "python";
+        if (name.endsWith(".js")) return "javascript";
+        if (name.endsWith(".ts")) return "typescript";
+        return "text";
+    }
+
+    private List<Map<String, Object>> buildSelectionChunk(VirtualFile file, Editor editor, String selectedText) {
+        List<Map<String, Object>> chunks = new ArrayList<>();
+        int startOffset = editor.getSelectionModel().getSelectionStart();
+        int endOffset = editor.getSelectionModel().getSelectionEnd();
+        chunks.add(createChunk(
+                file.getPath() + ":selection:" + startOffset + "-" + endOffset,
+                "selection",
+                editor.getDocument().getLineNumber(startOffset) + 1,
+                editor.getDocument().getLineNumber(Math.max(startOffset, endOffset - 1)) + 1,
+                selectedText
+        ));
+        return chunks;
+    }
+
+    private List<Map<String, Object>> buildSemanticChunks(Project project, VirtualFile file, Document doc) {
+        List<Map<String, Object>> chunks = new ArrayList<>();
+        PsiFile psiFile = PsiDocumentManager.getInstance(project).getPsiFile(doc);
+
+        if (psiFile != null && "java".equals(detectLanguage(file))) {
+            for (PsiClass psiClass : PsiTreeUtil.findChildrenOfType(psiFile, PsiClass.class)) {
+                addPsiChunk(file, doc, chunks, psiClass, "class");
+            }
+            for (PsiMethod psiMethod : PsiTreeUtil.findChildrenOfType(psiFile, PsiMethod.class)) {
+                addPsiChunk(file, doc, chunks, psiMethod, "method");
+            }
+        }
+
+        if (chunks.isEmpty()) {
+            chunks.addAll(splitByTokenBudget(file.getPath(), "text_window", doc.getText(), 1));
+        }
+        return chunks;
+    }
+
+    private void addPsiChunk(VirtualFile file, Document doc, List<Map<String, Object>> chunks, PsiElement element, String kind) {
+        int start = element.getTextRange().getStartOffset();
+        int end = element.getTextRange().getEndOffset();
+        String text = doc.getText().substring(start, end);
+        int estimatedTokens = estimateTokens(text);
+        if (estimatedTokens <= MAX_CHUNK_TOKENS) {
+            chunks.add(createChunk(
+                    file.getPath() + ":" + kind + ":" + start + "-" + end,
+                    kind,
+                    doc.getLineNumber(start) + 1,
+                    doc.getLineNumber(Math.max(start, end - 1)) + 1,
+                    text
+            ));
+        } else {
+            chunks.addAll(splitByTokenBudget(file.getPath() + ":" + kind, kind + "_window", text, doc.getLineNumber(start) + 1));
+        }
+    }
+
+    private List<Map<String, Object>> splitByTokenBudget(String chunkPrefix, String kind, String text, int baseLine) {
+        List<Map<String, Object>> chunks = new ArrayList<>();
+        String[] lines = text.split("\n", -1);
+        StringBuilder current = new StringBuilder();
+        int startLine = baseLine;
+        int line = baseLine;
+        int index = 0;
+        for (String nextLine : lines) {
+            String candidate = current + nextLine + "\n";
+            if (estimateTokens(candidate) > MAX_CHUNK_TOKENS && current.length() > 0) {
+                chunks.add(createChunk(chunkPrefix + ":" + index, kind, startLine, line - 1, current.toString()));
+                current.setLength(0);
+                startLine = line;
+                index++;
+            }
+            current.append(nextLine).append("\n");
+            line++;
+        }
+        if (current.length() > 0) {
+            chunks.add(createChunk(chunkPrefix + ":" + index, kind, startLine, line - 1, current.toString()));
+        }
+        return chunks;
+    }
+
+    private Map<String, Object> createChunk(String id, String kind, int startLine, int endLine, String text) {
+        Map<String, Object> chunk = new HashMap<>();
+        chunk.put("chunk_id", id);
+        chunk.put("kind", kind);
+        chunk.put("start_line", startLine);
+        chunk.put("end_line", endLine);
+        chunk.put("estimated_tokens", estimateTokens(text));
+        chunk.put("text", text);
+        return chunk;
+    }
+
+    private int estimateTokens(String text) {
+        if (text == null || text.isEmpty()) return 0;
+        int asciiTokenEstimate = Math.max(1, text.length() / 4);
+        int nonAscii = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) > 127) nonAscii++;
+        }
+        return asciiTokenEstimate + nonAscii;
     }
 
     /**

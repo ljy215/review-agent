@@ -1,24 +1,58 @@
+import json
+
 import requests
 
-url = "http://127.0.0.1:8000/api/review"
+url = "http://127.0.0.1:8000/api/project_review"
 
-# 故意留空语言字段，测试自动侦测和 AST 分析
 data = {
-    "language": "",
-    "code_content": """
-    public class UserController {
-        public void getUserInfo(String id) {
-            System.out.println("Get user: " + id);
-        }
-
-        private boolean checkPermission() {
-            return true;
-        }
+    "task": "code_review",
+    "files": [
+        {
+            "path": "/tmp/UserController.java",
+            "name": "UserController.java",
+            "language": "java",
+            "content": """
+public class UserController {
+    public void getUserInfo(String id) {
+        System.out.println("Get user: " + id);
     }
-    """
+
+    private boolean checkPermission() {
+        return true;
+    }
+}
+""".strip(),
+            "chunks": [
+                {
+                    "chunk_id": "UserController.java:class:1-8",
+                    "kind": "class",
+                    "start_line": 1,
+                    "end_line": 8,
+                    "estimated_tokens": 120,
+                    "text": """
+public class UserController {
+    public void getUserInfo(String id) {
+        System.out.println("Get user: " + id);
+    }
+
+    private boolean checkPermission() {
+        return true;
+    }
+}
+""".strip(),
+                }
+            ],
+        }
+    ],
+    "standard_library_hits": [
+        {
+            "rule_id": "ARCH-001",
+            "title": "Service layer should validate permission before user lookup",
+            "dimension": "architecture",
+            "content": "Sensitive controller methods must call authorization checks before business access.",
+        }
+    ],
 }
 
-response = requests.post(url, json=data)
-print("\n=== Agent 返回结果 ===")
-print("识别出的语言:", response.json().get("language_detected"))
-print("\nReview 意见:\n", response.json().get("review_result"))
+response = requests.post(url, json=data, timeout=60)
+print(json.dumps(response.json(), ensure_ascii=False, indent=2))
